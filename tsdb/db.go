@@ -93,6 +93,7 @@ func DefaultOptions() *Options {
 		CompactionDelayMaxPercent:   DefaultCompactionDelayMaxPercent,
 		CompactionDelay:             time.Duration(0),
 		PostingsDecoderFactory:      DefaultPostingsDecoderFactory,
+		AllowLargeOOOWindow:         false,
 	}
 }
 
@@ -187,6 +188,9 @@ type Options struct {
 	// OutOfOrderCapMax is maximum capacity for OOO chunks (in samples).
 	// If it is <=0, the default value is assumed.
 	OutOfOrderCapMax int64
+
+	// AllowLargeOOOWindow controls whether large out_of_order exemplar time windows are allowed.
+	AllowLargeOOOWindow bool
 
 	// Compaction of overlapping blocks are allowed if EnableOverlappingCompaction is true.
 	// This is an optional flag for overlapping blocks.
@@ -1174,6 +1178,22 @@ func (db *DB) ApplyConfig(conf *config.Config) error {
 
 	db.opts.OutOfOrderTimeWindow = oooTimeWindow
 	db.head.ApplyConfig(conf, wblog)
+
+	if conf.StorageConfig.ExemplarsConfig != nil && conf.StorageConfig.ExemplarsConfig.EnableOutOfOrder {
+		db.logger.Info("EXPERIMENTAL FEATURE ENABLED: Out-of-order exemplar support is active")
+		tw := time.Duration(conf.StorageConfig.ExemplarsConfig.OutOfOrderConfig.TimeWindow)
+		if conf.StorageConfig.ExemplarsConfig.OutOfOrderConfig.MaxBufferSizePerSeries > 1000 {
+			db.logger.Warn("Exemplar out_of_order max_buffer_size_per_series is large", "value", conf.StorageConfig.ExemplarsConfig.OutOfOrderConfig.MaxBufferSizePerSeries)
+		}
+		if tw > 10*time.Minute && !db.opts.AllowLargeOOOWindow {
+			return fmt.Errorf("exemplar out_of_order time_window %s exceeds soft limit, use --storage.tsdb.exemplars.allow-large-time-window", tw)
+		}
+		if tw > 10*time.Minute {
+			db.logger.Warn("Unsafe exemplar out_of_order time_window", "value", tw.String())
+		} else if tw >= 8*time.Minute {
+			db.logger.Warn("Exemplar out_of_order time_window is large", "value", tw.String())
+		}
+	}
 
 	if !db.oooWasEnabled.Load() {
 		db.oooWasEnabled.Store(oooTimeWindow > 0)

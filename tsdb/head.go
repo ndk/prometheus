@@ -83,6 +83,7 @@ type Head struct {
 	wal, wbl            *wlog.WL
 	exemplarMetrics     *ExemplarMetrics
 	exemplars           ExemplarStorage
+	oooExemplarStorage  *OutOfOrderExemplarStorage
 	logger              *slog.Logger
 	appendPool          zeropool.Pool[[]record.RefSample]
 	exemplarsPool       zeropool.Pool[[]exemplarWithSeriesRef]
@@ -1027,6 +1028,17 @@ func (h *Head) ApplyConfig(cfg *config.Config, wbl *wlog.WL) {
 
 	migrated := h.exemplars.(*CircularExemplarStorage).Resize(newSize)
 	h.logger.Info("Exemplar storage resized", "from", prevSize, "to", newSize, "migrated", migrated)
+
+	if cfg.StorageConfig.ExemplarsConfig.EnableOutOfOrder {
+		if h.oooExemplarStorage == nil {
+			h.oooExemplarStorage = NewOutOfOrderExemplarStorage(h, cfg.StorageConfig.ExemplarsConfig.OutOfOrderConfig)
+		} else {
+			h.oooExemplarStorage.cfg = cfg.StorageConfig.ExemplarsConfig.OutOfOrderConfig
+		}
+	} else if h.oooExemplarStorage != nil {
+		h.oooExemplarStorage.Stop()
+		h.oooExemplarStorage = nil
+	}
 }
 
 // SetOutOfOrderTimeWindow updates the out of order related parameters.
@@ -1047,6 +1059,16 @@ func (h *Head) EnableNativeHistograms() {
 // DisableNativeHistograms disables the native histogram feature.
 func (h *Head) DisableNativeHistograms() {
 	h.opts.EnableNativeHistograms.Store(false)
+}
+
+func (h *Head) commitBufferedExemplars(ref uint64, exs []exemplar.Exemplar) {
+	s := h.series.getByID(chunks.HeadSeriesRef(ref))
+	if s == nil {
+		return
+	}
+	if ce, ok := h.exemplars.(*CircularExemplarStorage); ok {
+		ce.addExemplarsBatch(s.labels(), exs)
+	}
 }
 
 // PostingsCardinalityStats returns highest cardinality stats by label and value names.

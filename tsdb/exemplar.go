@@ -402,6 +402,62 @@ func (ce *CircularExemplarStorage) AddExemplar(l labels.Labels, e exemplar.Exemp
 	return nil
 }
 
+// addExemplarsBatch inserts a sorted slice of exemplars for a single series under one lock.
+func (ce *CircularExemplarStorage) addExemplarsBatch(l labels.Labels, es []exemplar.Exemplar) {
+	ce.lock.Lock()
+	defer ce.lock.Unlock()
+
+	if len(ce.exemplars) == 0 || len(es) == 0 {
+		return
+	}
+
+	var buf [1024]byte
+	seriesLabels := l.Bytes(buf[:])
+
+	idx, ok := ce.index[string(seriesLabels)]
+	if !ok {
+		idx = &indexEntry{oldest: ce.nextIndex, seriesLabels: l}
+		ce.index[string(seriesLabels)] = idx
+	}
+
+	prevIdx := idx.newest
+	if ok {
+		ce.exemplars[idx.newest].next = ce.nextIndex
+		prevIdx = ce.nextIndex
+	}
+
+	first := true
+	for _, e := range es {
+
+		if prev := &ce.exemplars[ce.nextIndex]; prev.ref != nil {
+			if prev.next == noExemplar {
+				var buf2 [1024]byte
+				prevLabels := prev.ref.seriesLabels.Bytes(buf2[:])
+				delete(ce.index, string(prevLabels))
+			} else {
+				prev.ref.oldest = prev.next
+			}
+		}
+
+		ce.exemplars[ce.nextIndex].next = noExemplar
+		ce.exemplars[ce.nextIndex].exemplar = e
+		ce.exemplars[ce.nextIndex].ref = idx
+		if first && ok {
+			// Already linked previous newest to the first new exemplar above.
+			first = false
+		} else if !first {
+			ce.exemplars[prevIdx].next = ce.nextIndex
+		}
+		prevIdx = ce.nextIndex
+		idx.newest = ce.nextIndex
+
+		ce.nextIndex = (ce.nextIndex + 1) % len(ce.exemplars)
+		ce.metrics.exemplarsAppended.Inc()
+	}
+
+	ce.computeMetrics()
+}
+
 func (ce *CircularExemplarStorage) computeMetrics() {
 	ce.metrics.seriesWithExemplarsInStorage.Set(float64(len(ce.index)))
 

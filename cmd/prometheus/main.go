@@ -203,6 +203,8 @@ type flagConfig struct {
 	memlimitEnable bool
 	memlimitRatio  float64
 
+	allowLargeOOOWindow bool
+
 	featureList []string
 	// These options are extracted from featureList
 	// for ease of use.
@@ -454,6 +456,9 @@ func main() {
 
 	serverOnlyFlag(a, "storage.tsdb.allow-overlapping-compaction", "Allow compaction of overlapping blocks. If set to false, TSDB stops vertical compaction and leaves overlapping blocks there. The use case is to let another component handle the compaction of overlapping blocks.").
 		Default("true").Hidden().BoolVar(&cfg.tsdb.EnableOverlappingCompaction)
+
+	serverOnlyFlag(a, "storage.tsdb.exemplars.allow-large-time-window", "Allow exemplar out_of_order time_window above 10 minutes").
+		Default("false").BoolVar(&cfg.allowLargeOOOWindow)
 
 	var (
 		tsdbWALCompression     bool
@@ -1281,6 +1286,7 @@ func main() {
 	}
 	if !agentMode {
 		// TSDB.
+		cfg.tsdb.AllowLargeOOOWindow = cfg.allowLargeOOOWindow
 		opts := cfg.tsdb.ToTSDBOptions()
 		cancel := make(chan struct{})
 		g.Add(
@@ -1860,6 +1866,7 @@ type tsdbOptions struct {
 	CompactionDelayMaxPercent      int
 	EnableOverlappingCompaction    bool
 	UseUncachedIO                  bool
+	AllowLargeOOOWindow            bool
 }
 
 func (opts tsdbOptions) ToTSDBOptions() tsdb.Options {
@@ -1884,6 +1891,7 @@ func (opts tsdbOptions) ToTSDBOptions() tsdb.Options {
 		CompactionDelayMaxPercent:      opts.CompactionDelayMaxPercent,
 		EnableOverlappingCompaction:    opts.EnableOverlappingCompaction,
 		UseUncachedIO:                  opts.UseUncachedIO,
+		AllowLargeOOOWindow:            opts.AllowLargeOOOWindow,
 	}
 }
 

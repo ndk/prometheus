@@ -47,6 +47,7 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/goleak"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
@@ -4650,6 +4651,53 @@ func TestMetadataInWAL(t *testing.T) {
 	require.Len(t, gotMetadataBlocks, 2)
 	require.Equal(t, expectedMetadata[:3], gotMetadataBlocks[0])
 	require.Equal(t, expectedMetadata[3:], gotMetadataBlocks[1])
+}
+
+func newTestDBWithLogger(t *testing.T, l *slog.Logger) *DB {
+	dir := t.TempDir()
+	db, err := Open(dir, l, nil, DefaultOptions(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return db
+}
+
+func TestDB_ApplyConfig_RejectsUnsafeOOOWindowWithoutFlag(t *testing.T) {
+	db := newTestDB(t)
+	conf := &config.Config{
+		StorageConfig: config.StorageConfig{
+			ExemplarsConfig: &config.ExemplarsConfig{
+				EnableOutOfOrder: true,
+				OutOfOrderConfig: config.ExemplarOutOfOrderConfig{
+					TimeWindow:              model.Duration(15 * time.Minute),
+					MaxBufferSizePerSeries:  50,
+					MaxTotalBufferSizeBytes: 1 << 20,
+				},
+			},
+		},
+	}
+	err := db.ApplyConfig(conf)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "allow-large-time-window")
+}
+
+func TestDB_ApplyConfig_LogsWarningForLargeValues(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	db := newTestDBWithLogger(t, logger)
+	conf := &config.Config{
+		StorageConfig: config.StorageConfig{
+			ExemplarsConfig: &config.ExemplarsConfig{
+				EnableOutOfOrder: true,
+				OutOfOrderConfig: config.ExemplarOutOfOrderConfig{
+					TimeWindow:              model.Duration(8 * time.Minute),
+					MaxBufferSizePerSeries:  50,
+					MaxTotalBufferSizeBytes: 1 << 20,
+				},
+			},
+		},
+	}
+	require.NoError(t, db.ApplyConfig(conf))
+	require.Contains(t, buf.String(), "Exemplar out_of_order time_window is large")
 }
 
 func TestMetadataCheckpointingOnlyKeepsLatestEntry(t *testing.T) {

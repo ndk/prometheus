@@ -632,8 +632,13 @@ func (a *headAppender) AppendExemplar(ref storage.SeriesRef, lset labels.Labels,
 	err := a.head.exemplars.ValidateExemplar(s.labels(), e)
 	if err != nil {
 		if errors.Is(err, storage.ErrDuplicateExemplar) || errors.Is(err, storage.ErrExemplarsDisabled) {
-			// Duplicate, don't return an error but don't accept the exemplar.
+			if errors.Is(err, storage.ErrDuplicateExemplar) && a.head.oooExemplarStorage != nil {
+				a.head.oooExemplarStorage.metrics.dropped.WithLabelValues("duplicate").Inc()
+			}
 			return 0, nil
+		}
+		if errors.Is(err, storage.ErrOutOfOrderExemplar) && a.head.oooExemplarStorage != nil {
+			return storage.SeriesRef(s.ref), a.head.oooExemplarStorage.Add(uint64(ref), e)
 		}
 		return 0, err
 	}

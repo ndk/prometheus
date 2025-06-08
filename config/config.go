@@ -252,7 +252,13 @@ var (
 	}
 
 	DefaultExemplarsConfig = ExemplarsConfig{
-		MaxExemplars: 100000,
+		MaxExemplars:     100000,
+		EnableOutOfOrder: false,
+		OutOfOrderConfig: ExemplarOutOfOrderConfig{
+			TimeWindow:              model.Duration(30 * time.Second),
+			MaxBufferSizePerSeries:  50,
+			MaxTotalBufferSizeBytes: 1 * 1024 * 1024 * 1024,
+		},
 	}
 
 	// DefaultOTLPConfig is the default OTLP configuration.
@@ -433,6 +439,19 @@ func (c *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 			return fmt.Errorf("found multiple remote read configs with job name %q", rrcfg.Name)
 		}
 		rrNames[rrcfg.Name] = struct{}{}
+	}
+
+	if c.StorageConfig.ExemplarsConfig != nil {
+		ooo := &c.StorageConfig.ExemplarsConfig.OutOfOrderConfig
+		if ooo.TimeWindow == 0 {
+			ooo.TimeWindow = model.Duration(30 * time.Second)
+		}
+		if ooo.MaxBufferSizePerSeries == 0 {
+			ooo.MaxBufferSizePerSeries = 50
+		}
+		if ooo.MaxTotalBufferSizeBytes == 0 {
+			ooo.MaxTotalBufferSizeBytes = 1 * 1024 * 1024 * 1024
+		}
 	}
 	return nil
 }
@@ -1067,7 +1086,15 @@ func (t *TracingConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 type ExemplarsConfig struct {
 	// MaxExemplars sets the size, in # of exemplars stored, of the single circular buffer used to store exemplars in memory.
 	// Use a value of 0 or less than 0 to disable the storage without having to restart Prometheus.
-	MaxExemplars int64 `yaml:"max_exemplars,omitempty"`
+	MaxExemplars     int64                    `yaml:"max_exemplars,omitempty"`
+	EnableOutOfOrder bool                     `yaml:"enable_out_of_order,omitempty"`
+	OutOfOrderConfig ExemplarOutOfOrderConfig `yaml:"out_of_order,omitempty"`
+}
+
+type ExemplarOutOfOrderConfig struct {
+	TimeWindow              model.Duration `yaml:"time_window,omitempty"`
+	MaxBufferSizePerSeries  int            `yaml:"max_buffer_size_per_series,omitempty"`
+	MaxTotalBufferSizeBytes int64          `yaml:"max_total_buffer_size_bytes,omitempty"`
 }
 
 // AlertingConfig configures alerting and alertmanager related configs.
